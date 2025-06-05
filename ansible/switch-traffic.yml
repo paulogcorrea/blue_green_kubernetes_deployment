@@ -1,0 +1,19 @@
+- name: Switch traffic to green deployment
+  hosts: localhost
+  gather_facts: false
+  collections:
+    - kubernetes.core
+  tasks:
+    - name: Switch service selector to green
+      kubernetes.core.k8s:
+        state: present
+        kind: Service
+        name: demo-app
+        namespace: argo
+        merge_type:
+          - strategic-merge
+        definition:
+          spec:
+            selector:
+              app: demo-app
+              release: green

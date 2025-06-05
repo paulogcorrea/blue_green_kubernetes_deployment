@@ -1,0 +1,16 @@
+- name: Patch service to green for smoke test
+  hosts: localhost
+  gather_facts: no
+  tasks:
+    - name: Patch demo-app service to green
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Service
+        name: demo-app
+        namespace: argo
+        merge_type: merge
+        definition:
+          spec:
+            selector:
+              app: demo-app
+              release: green

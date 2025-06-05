@@ -1,0 +1,141 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: bluegreen-
+spec:
+  entrypoint: nightly-release
+  serviceAccountName: argo-workflow
+  onExit: rollback-clean
+
+  volumes:
+    - name: ansible-playbooks
+      configMap:
+        name: ansible-playbooks
+
+  templates:
+
+    - name: nightly-release
+      dag:
+        tasks:
+          - name: lint
+            template: lint
+
+          - name: create-green
+            dependencies: [lint]
+            template: ansible-run
+            arguments:
+              parameters:
+                - name: play
+                  value: playbook.yml
+
+          - name: patch-service-green
+            dependencies: [create-green]
+            template: ansible-run
+            arguments:
+              parameters:
+                - name: play
+                  value: patch-green.yml
+
+          - name: wait-for-green
+            dependencies: [patch-service-green]
+            template: wait
+
+          - name: smoke-test
+            dependencies: [wait-for-green]
+            template: smoke-test
+
+          - name: switch-traffic
+            dependencies: [smoke-test]
+            template: ansible-run
+            arguments:
+              parameters:
+                - name: play
+                  value: switch-traffic.yml
+
+    - name: rollback-clean
+      steps:
+        - - name: do-rollback
+            template: ansible-run
+            arguments:
+              parameters:
+                - name: play
+                  value: rollback.yml
+
+    - name: lint
+      container:
+        image: python:3.12-slim
+        command: [bash, -exc]
+        args:
+          - |
+            echo "📦 Installing dependencies"
+            python3 -m pip install --upgrade pip
+            pip install --quiet ansible ansible-lint yamllint kubernetes openshift
+
+            echo "📁 Preparing directory"
+            mkdir -p /src/ansible
+            cp /mnt/ansible/* /src/ansible/
+
+            echo "📁 Listing files:"
+            ls -alh /src/ansible
+
+            echo "📁 Available collections:"
+            ansible-galaxy collection list
+
+            echo "🔍 Running ansible-lint"
+            ansible-lint -x line-length /mnt/ansible || echo "ansible-lint exited with warnings"
+
+            echo "✅ Lint finished"
+        volumeMounts:
+          - name: ansible-playbooks
+            mountPath: /mnt/ansible
+
+    - name: ansible-run
+      inputs:
+        parameters:
+          - name: play
+      container:
+        image: quay.io/ansible/ansible-runner:stable-2.9-latest
+        workingDir: /src
+        command: [bash, -exc]
+        args:
+          - |
+            echo "📁 Listing before copy:"
+            ls -alh /src || echo "⚠️ /src missing"
+            mkdir -p /src/ansible
+            cp /mnt/ansible/* /src/ansible/
+            echo "📁 After copy:"
+            ls -alh /src/ansible
+            echo "📦 Installing dependencies"
+            python3 -m pip install --upgrade pip
+            pip install kubernetes openshift
+            ansible-galaxy collection install kubernetes.core
+            echo "🚀 Running playbook: {{inputs.parameters.play}}"
+            ansible-runner run /src/ansible -p {{inputs.parameters.play}}
+        volumeMounts:
+          - name: ansible-playbooks
+            mountPath: /mnt/ansible
+
+    - name: smoke-test
+      container:
+        image: bitnami/kubectl:latest
+        command: [sh, -c]
+        args:
+          - |
+            for i in $(seq 1 20); do
+              echo "🔁 Smoke test attempt $i http://demo-app:80"
+              kubectl run tmp-curl --rm -i --restart=Never --image=curlimages/curl -- sh -c "curl -sf http://demo-app:80" && echo "✅ Passed" && exit 0
+              sleep 3
+            done
+            echo "❌ Failed after 20 attempts"
+            exit 1
+
+    - name: wait
+      container:
+        image: bitnami/kubectl:latest
+        command: ["sh", "-c"]
+        args:
+          - |
+            echo '⏳ Waiting for green deployment to be ready...';
+            kubectl rollout status deployment/demo-app-green -n argo --timeout=60s;
+            echo '✅ Green rollout complete. Waiting a few seconds more...';
+            sleep 5

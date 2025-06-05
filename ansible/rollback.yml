@@ -1,0 +1,19 @@
+- name: Rollback to blue deployment
+  hosts: localhost
+  gather_facts: false
+  collections:
+    - kubernetes.core
+  tasks:
+    - name: Patch service back to blue
+      kubernetes.core.k8s:
+        state: present
+        kind: Service
+        name: demo-app
+        namespace: argo
+        merge_type:
+          - strategic-merge
+        definition:
+          spec:
+            selector:
+              app: demo-app
+              release: blue
