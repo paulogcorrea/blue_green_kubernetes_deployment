@@ -1,4 +1,4 @@
-.PHONY: cluster deploy submit test clean logs status rollback argo-ui
+.PHONY: cluster deploy submit test clean logs status rollback argo-ui submit-canary test-canary interactive
 
 cluster:
 	kind create cluster --name argo-task || true
@@ -17,7 +17,15 @@ deploy:
 submit:
 	argo submit argo/workflow-skeleton.yaml -n argo
 
+submit-canary:
+	argo submit argo/workflow-canary.yaml -n argo
+
 test: cluster deploy submit
+
+test-canary: cluster deploy submit-canary
+
+interactive:
+	./run-test.sh
 
 clean:
 	kind delete cluster --name argo-task

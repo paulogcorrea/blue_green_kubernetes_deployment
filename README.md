@@ -1,12 +1,14 @@
-# 🔄 Blue/Green Zero Downtime Deployment with Argo Workflows
+# 🔄 Zero Downtime Deployment Strategies with Argo Workflows
 
-This project demonstrates a **zero-downtime blue/green deployment** strategy using:
+This project demonstrates **zero-downtime deployment strategies** using:
 
+- ✅ **Blue/Green Deployment** - Instant traffic switch
+- ✅ **Canary Deployment** - Gradual traffic shift with monitoring
 - ✅ Kubernetes
 - ✅ Ansible playbooks
 - ✅ Argo Workflows
 - ✅ Kind (Kubernetes in Docker)
-- ✅ Smoke testing before traffic switch
+- ✅ Smoke testing and health monitoring
 
 ---
 
@@ -15,7 +17,8 @@ This project demonstrates a **zero-downtime blue/green deployment** strategy usi
 ```
 .
 ├── argo/
-│   ├── workflow-skeleton.yaml       # Main Argo Workflow definition
+│   ├── workflow-skeleton.yaml       # Blue/Green Argo Workflow definition
+│   ├── workflow-canary.yaml         # Canary Argo Workflow definition
 │   ├── service-account.yml          # ServiceAccount for workflows
 │   ├── rbac-auth.yml                # RBAC permissions for workflow runner
 ├── ansible/
@@ -23,11 +26,19 @@ This project demonstrates a **zero-downtime blue/green deployment** strategy usi
 │   ├── patch-green.yml              # Patches Service to point to green
 │   ├── switch-traffic.yml           # Final switch to green
 │   ├── rollback.yml                 # Rollback to blue if green fails
+│   ├── deploy-canary.yml            # Creates canary deployment
+│   ├── scale-canary.yml             # Scales canary for 50% traffic
+│   ├── promote-canary.yml           # Promotes canary to full production
+│   ├── rollback-canary.yml          # Rollback canary deployment
 ├── k8s/
 │   ├── deployment-blue.yaml         # Blue deployment definition
 │   ├── deployment-green.yaml        # Green deployment definition
+│   ├── deployment-canary.yaml       # Canary deployment definition
 │   ├── service.yaml                 # Service pointing to current release
-├── test.sh                          # Automates full test in Kind
+│   ├── service-canary.yaml          # Dedicated canary service
+├── test.sh                          # Blue/Green test automation
+├── test-canary.sh                   # Canary test automation
+├── run-test.sh                      # Interactive test selector
 ```
 
 ---
