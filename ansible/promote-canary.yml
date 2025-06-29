@@ -1,0 +1,41 @@
+- name: Promote canary to full production
+  hosts: localhost
+  gather_facts: false
+  collections:
+    - kubernetes.core
+  tasks:
+    - name: Switch main service to canary
+      kubernetes.core.k8s:
+        state: present
+        kind: Service
+        name: demo-app
+        namespace: argo
+        merge_type:
+          - strategic-merge
+        definition:
+          spec:
+            selector:
+              app: demo-app
+              release: canary
+
+    - name: Scale canary to full capacity
+      kubernetes.core.k8s:
+        api_version: apps/v1
+        kind: Deployment
+        name: demo-app-canary
+        namespace: argo
+        merge_type: merge
+        definition:
+          spec:
+            replicas: 3
+
+    - name: Scale down blue deployment
+      kubernetes.core.k8s:
+        api_version: apps/v1
+        kind: Deployment
+        name: demo-app-blue
+        namespace: argo
+        merge_type: merge
+        definition:
+          spec:
+            replicas: 0
