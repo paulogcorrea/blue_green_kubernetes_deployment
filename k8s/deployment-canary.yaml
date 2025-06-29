@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-app-canary
+  namespace: argo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: demo-app
+      release: canary
+  template:
+    metadata:
+      labels:
+        app: demo-app
+        release: canary
+    spec:
+      containers:
+        - name: echo
+          image: hashicorp/http-echo
+          args:
+            - "-text=Hello from Canary v2.0!"
+          ports:
+            - containerPort: 5678
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 5678
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 1
+            successThreshold: 1
+            failureThreshold: 3
