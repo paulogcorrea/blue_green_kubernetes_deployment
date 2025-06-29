@@ -1,0 +1,27 @@
+- name: Scale canary deployment for increased traffic
+  hosts: localhost
+  gather_facts: false
+  collections:
+    - kubernetes.core
+  tasks:
+    - name: Scale canary deployment to 2 replicas (50% traffic)
+      kubernetes.core.k8s:
+        api_version: apps/v1
+        kind: Deployment
+        name: demo-app-canary
+        namespace: argo
+        merge_type: merge
+        definition:
+          spec:
+            replicas: 2
+
+    - name: Scale blue deployment to 2 replicas (50% traffic)
+      kubernetes.core.k8s:
+        api_version: apps/v1
+        kind: Deployment
+        name: demo-app-blue
+        namespace: argo
+        merge_type: merge
+        definition:
+          spec:
+            replicas: 2

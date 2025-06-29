@@ -1,0 +1,206 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: canary-deployment-
+spec:
+  entrypoint: canary-release
+  serviceAccountName: argo-workflow
+  onExit: rollback-canary-on-failure
+
+  volumes:
+    - name: ansible-playbooks
+      configMap:
+        name: ansible-playbooks
+
+  templates:
+
+    - name: canary-release
+      dag:
+        tasks:
+          - name: lint
+            template: lint
+
+          - name: deploy-canary
+            dependencies: [lint]
+            template: ansible-run
+            arguments:
+              parameters:
+                - name: play
+                  value: deploy-canary.yml
+
+          - name: wait-for-canary
+            dependencies: [deploy-canary]
+            template: wait-canary
+
+          - name: smoke-test-canary
+            dependencies: [wait-for-canary]
+            template: smoke-test-canary
+
+          - name: monitor-canary-10pct
+            dependencies: [smoke-test-canary]
+            template: monitor-metrics
+            arguments:
+              parameters:
+                - name: duration
+                  value: "30"
+                - name: stage
+                  value: "10% traffic"
+
+          - name: scale-canary-50pct
+            dependencies: [monitor-canary-10pct]
+            template: ansible-run
+            arguments:
+              parameters:
+                - name: play
+                  value: scale-canary.yml
+
+          - name: monitor-canary-50pct
+            dependencies: [scale-canary-50pct]
+            template: monitor-metrics
+            arguments:
+              parameters:
+                - name: duration
+                  value: "60"
+                - name: stage
+                  value: "50% traffic"
+
+          - name: promote-canary
+            dependencies: [monitor-canary-50pct]
+            template: ansible-run
+            arguments:
+              parameters:
+                - name: play
+                  value: promote-canary.yml
+
+          - name: final-smoke-test
+            dependencies: [promote-canary]
+            template: smoke-test
+
+    - name: rollback-canary-on-failure
+      steps:
+        - - name: do-rollback-canary
+            template: ansible-run
+            arguments:
+              parameters:
+                - name: play
+                  value: rollback-canary.yml
+
+    - name: lint
+      container:
+        image: python:3.12-slim
+        command: [bash, -exc]
+        args:
+          - |
+            echo "📦 Installing dependencies"
+            python3 -m pip install --upgrade pip
+            pip install --quiet ansible ansible-lint yamllint kubernetes openshift
+
+            echo "📁 Preparing directory"
+            mkdir -p /src/ansible
+            cp /mnt/ansible/* /src/ansible/
+
+            echo "📁 Listing files:"
+            ls -alh /src/ansible
+
+            echo "🔍 Running ansible-lint"
+            ansible-lint -x line-length /mnt/ansible || echo "ansible-lint exited with warnings"
+
+            echo "✅ Lint finished"
+        volumeMounts:
+          - name: ansible-playbooks
+            mountPath: /mnt/ansible
+
+    - name: ansible-run
+      inputs:
+        parameters:
+          - name: play
+      container:
+        image: quay.io/ansible/ansible-runner:stable-2.9-latest
+        workingDir: /src
+        command: [bash, -exc]
+        args:
+          - |
+            echo "📁 Preparing ansible environment..."
+            mkdir -p /src/ansible
+            cp /mnt/ansible/* /src/ansible/
+            echo "📦 Installing dependencies"
+            python3 -m pip install --upgrade pip
+            pip install kubernetes openshift
+            ansible-galaxy collection install kubernetes.core
+            echo "🚀 Running playbook: {{inputs.parameters.play}}"
+            ansible-runner run /src/ansible -p {{inputs.parameters.play}}
+        volumeMounts:
+          - name: ansible-playbooks
+            mountPath: /mnt/ansible
+
+    - name: smoke-test-canary
+      container:
+        image: bitnami/kubectl:latest
+        command: [sh, -c]
+        args:
+          - |
+            echo "🔁 Testing canary service directly..."
+            for i in $(seq 1 10); do
+              echo "🔁 Canary smoke test attempt $i"
+              kubectl run tmp-curl-canary --rm -i --restart=Never --image=curlimages/curl -- sh -c "curl -sf http://demo-app-canary:80" && echo "✅ Canary service responding" && exit 0
+              sleep 3
+            done
+            echo "❌ Canary service failed after 10 attempts"
+            exit 1
+
+    - name: smoke-test
+      container:
+        image: bitnami/kubectl:latest
+        command: [sh, -c]
+        args:
+          - |
+            for i in $(seq 1 15); do
+              echo "🔁 Smoke test attempt $i http://demo-app:80"
+              kubectl run tmp-curl --rm -i --restart=Never --image=curlimages/curl -- sh -c "curl -sf http://demo-app:80" && echo "✅ Passed" && exit 0
+              sleep 3
+            done
+            echo "❌ Failed after 15 attempts"
+            exit 1
+
+    - name: wait-canary
+      container:
+        image: bitnami/kubectl:latest
+        command: ["sh", "-c"]
+        args:
+          - |
+            echo '⏳ Waiting for canary deployment to be ready...'
+            kubectl rollout status deployment/demo-app-canary -n argo --timeout=120s
+            echo '✅ Canary rollout complete. Waiting a few seconds more...'
+            sleep 10
+
+    - name: monitor-metrics
+      inputs:
+        parameters:
+          - name: duration
+          - name: stage
+      container:
+        image: bitnami/kubectl:latest
+        command: [sh, -c]
+        args:
+          - |
+            echo "📊 Monitoring {{inputs.parameters.stage}} for {{inputs.parameters.duration}} seconds..."
+            
+            # Simulate monitoring by checking service health
+            DURATION={{inputs.parameters.duration}}
+            INTERVAL=5
+            CHECKS=$((DURATION / INTERVAL))
+            
+            for i in $(seq 1 $CHECKS); do
+              echo "📈 Health check $i/$CHECKS for {{inputs.parameters.stage}}"
+              
+              # Test main service (mixed traffic)
+              kubectl run health-check-$i --rm -i --restart=Never --image=curlimages/curl -- sh -c "curl -sf http://demo-app:80" || {
+                echo "❌ Health check failed at {{inputs.parameters.stage}}"
+                exit 1
+              }
+              
+              echo "✅ Health check $i passed"
+              sleep $INTERVAL
+            done
+            
+            echo "✅ Monitoring completed for {{inputs.parameters.stage}} - All checks passed!"
